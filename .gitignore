@@ -1,0 +1,11 @@
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+.env
+*.sqlite
+*.db
+/data/*
+!/data/.gitkeep
+/models/*
+!/models/README.md

@@ -1,0 +1,1 @@
+Provide your own trusted, appropriately licensed YOLOv8n/YOLO11n detection ONNX model exported without embedded NMS (80 COCO labels) at input 640x640. Save as models/yolov8n.onnx or set MODEL_PATH. No model weights are bundled. Verify license terms for commercial use.

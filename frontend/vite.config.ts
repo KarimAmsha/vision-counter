@@ -1,0 +1,2 @@
+import {defineConfig} from 'vite';import react from '@vitejs/plugin-react';import {VitePWA} from 'vite-plugin-pwa';
+export default defineConfig({plugins:[react(),VitePWA({registerType:'autoUpdate',includeAssets:[],manifest:{name:'Vision Counter',short_name:'Vision',description:'Live computer vision analyzer',theme_color:'#0b1220',background_color:'#0b1220',display:'standalone',start_url:'/'},workbox:{globPatterns:['**/*.{js,css,html,svg}'],navigateFallback:'/index.html'}})],server:{proxy:{'/api':'http://127.0.0.1:8000','/ws':{target:'ws://127.0.0.1:8000',ws:true}}}})
