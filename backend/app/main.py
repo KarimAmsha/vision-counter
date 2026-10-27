@@ -4,14 +4,14 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import cv2
 import numpy as np
-from fastapi import FastAPI,WebSocket,WebSocketDisconnect,HTTPException,Header,UploadFile,File
+from fastapi import FastAPI,WebSocket,WebSocketDisconnect,HTTPException,Header,UploadFile,File,BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel,Field
-from sqlalchemy import create_engine,Column,String,Integer,Text,select
+from sqlalchemy import create_engine,Column,String,Integer,Float,Text,select
 from sqlalchemy.orm import DeclarativeBase,Session
 from openpyxl import Workbook
-from .engine import Detector,Tracker,Rules,draw,COCO
+from .engine import Detector,ModelUnavailable,Tracker,Rules,draw,COCO
 ROOT=Path(__file__).resolve().parents[2]; DATA=Path(os.getenv('DATA_DIR',str(ROOT/'data')));DATA.mkdir(parents=True,exist_ok=True)
 DB=create_engine('sqlite:///'+str(DATA/'vision.sqlite'),connect_args={'check_same_thread':False})
 class Base(DeclarativeBase):pass
@@ -24,14 +24,17 @@ MODEL_PATH=os.getenv('MODEL_PATH',str(ROOT/'models'/'yolov8n.onnx'))
 API_KEY=os.getenv('VISION_API_KEY','')
 if not API_KEY: print('WARNING: VISION_API_KEY is unset. Bind to loopback only; set a long random key before network exposure.')
 model=None;model_error=None;model_lock=asyncio.Lock();jobs={}
+
 def auth(token):
     if API_KEY and token!=API_KEY:raise HTTPException(401,'Invalid API key')
+
 def detector():
     global model,model_error
     if model is None:
         try:model=Detector(MODEL_PATH);model_error=None
         except Exception as e:model_error=str(e);raise
     return model
+
 @asynccontextmanager
 async def lifespan(app):
     yield
@@ -40,6 +43,7 @@ origins=os.getenv('CORS_ORIGINS','http://localhost:5173,http://127.0.0.1:5173').
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH'],allow_headers=['*'])
 class Correction(BaseModel):direction:str;reason:str=Field(min_length=3)
 class Source(BaseModel):name:str;url:str
+
 def row(e):return {k:getattr(e,k) for k in ('id','session_id','created_at','line_id','line_name','direction','category','track_id','corrected_direction','correction_reason')}
 @app.get('/api/health')
 def health():
@@ -88,11 +92,13 @@ def export(format:str,x_api_key:str|None=Header(None)):
         data=HTML(string=document).write_pdf()
         return StreamingResponse(io.BytesIO(data),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename=events.pdf'})
     raise HTTPException(400,'CSV, XLSX and PDF supported')
+
 def save_events(session_id,events):
     if not events:return
     with Session(DB) as db:
         for e in events:db.add(Event(id=str(uuid.uuid4()),session_id=session_id,created_at=datetime.now(timezone.utc).isoformat(),**e))
         db.commit()
+
 @app.websocket('/ws/live')
 async def live(ws:WebSocket):
     if API_KEY and ws.query_params.get('token')!=API_KEY:await ws.close(code=1008);return
@@ -100,7 +106,7 @@ async def live(ws:WebSocket):
     await ws.send_json({'type':'session','session_id':sid})
     try:
         while True:
-            payload=await ws.receive_text();started=time.perf_counter();msg=None
+            payload=await ws.receive_text();started=time.perf_counter()
             try:
                 msg=json.loads(payload)
                 if msg.get('type')!='frame':continue
@@ -117,6 +123,7 @@ async def live(ws:WebSocket):
                 await ws.send_json({'type':'result','seq':msg.get('seq',frame_seq),'jpeg':base64.b64encode(encoded).decode(),'width':w,'height':h,'detections':[{'box':d.box,'category':d.category,'confidence':round(d.confidence,3),'track_id':d.track_id} for d in det],'events':events,'counts':[{'line_id':k[0],'direction':k[1],'category':k[2],'value':v} for k,v in rules.counts.items()],'processing_ms':round((time.perf_counter()-started)*1000,1)})
             except Exception as e:await ws.send_json({'type':'error','message':str(e),'seq':msg.get('seq') if isinstance(msg,dict) else None})
     except WebSocketDisconnect:pass
+
 async def process_video(job_id,path):
     cap=cv2.VideoCapture(str(path));tracker=Tracker();frames=0
     try:

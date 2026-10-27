@@ -1,11 +1,10 @@
-"""OpenCV ONNX YOLOv8/YOLO11 inference, tracking and line crossing."""
+"""Real ONNX YOLOv8/YOLO11 object inference using OpenCV DNN. No simulated detections."""
 from dataclasses import dataclass
 from pathlib import Path
 import cv2
 import numpy as np
 
 COCO = ['person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed','dining table','toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush']
-
 @dataclass
 class Detection:
     box: tuple[int,int,int,int]
@@ -30,6 +29,7 @@ class Detector:
         self.net.setInput(blob); result=self.net.forward()
         out=np.squeeze(result)
         if out.ndim!=2:raise RuntimeError(f'Unexpected model output shape: {result.shape}')
+        # YOLOv8/11: [4+classes, candidates] or [candidates, 4+classes]. Not YOLOv5 with objectness.
         cls_count=len(self.labels)
         if out.shape[0]==cls_count+4:out=out.T
         if out.shape[1]!=cls_count+4:raise RuntimeError(f'Model output shape {result.shape} incompatible with {cls_count} labels; only YOLOv8/11 detect ONNX is supported')
@@ -42,6 +42,7 @@ class Detector:
             if x2<=x1 or y2<=y1:continue
             boxes.append([x1,y1,x2-x1,y2-y1]);scores.append(confidence);classes.append(label)
         if not boxes:return []
+        # Suppression per class, never suppress a person with an overlapping car
         picks=[]
         for label in set(classes):
             indices=[i for i,c in enumerate(classes) if c==label]
@@ -50,6 +51,7 @@ class Detector:
         return [Detection((boxes[i][0],boxes[i][1],boxes[i][0]+boxes[i][2],boxes[i][1]+boxes[i][3]),scores[i],classes[i]) for i in picks]
 
 class Tracker:
+    """Small IoU tracker with temporary IDs and bounded expiry, not cross-camera identity."""
     def __init__(self):self.tracks={};self.next_id=1;self.frame=0
     def update(self,detections:list[Detection])->list[Detection]:
         self.frame+=1;used=set()
@@ -83,6 +85,7 @@ class Rules:
             x=(d.box[0]+d.box[2])/(2*width);y=(d.box[1]+d.box[3])/(2*height)
             for line in lines:
                 a=line['a'];b=line['b'];side=signed_side((x,y),a,b)
+                # Dead band keeps same previous stable side when hugging the line
                 length=max(.001,((b[0]-a[0])**2+(b[1]-a[1])**2)**.5)
                 if abs(side)/length<.015:continue
                 sign=1 if side>0 else -1;key=(line['id'],d.track_id)
